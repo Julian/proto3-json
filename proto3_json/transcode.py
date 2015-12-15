@@ -14,7 +14,13 @@ class Transcoder(object):
     """
 
     def from_json(self, json_encoded_message):
-        return self.message_cls()
+        message = self.message_cls()
+        for key, value in json_encoded_message.iteritems():
+            setattr(message, key, value)
+        return message
 
     def to_json(self, message):
-        return {}
+        return {
+            name : getattr(message, name)
+            for name in message.DESCRIPTOR.fields_by_name
+        }

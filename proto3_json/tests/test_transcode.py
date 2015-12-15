@@ -1,10 +1,21 @@
+from ctypes import c_float
 from unittest import TestCase
 
 from google.protobuf import reflection
 from google.protobuf.descriptor import Descriptor, FieldDescriptor
-from hypothesis import given, strategies
+from hypothesis import example, given, strategies
 
 from proto3_json.transcode import Transcoder
+
+
+def type_with_value(value_strategy, *type_strategies):
+    just = strategies.sampled_from(type_strategies)
+    return just.flatmap(
+        lambda field_type : strategies.tuples(
+            strategies.just(field_type),
+            value_strategy,
+        )
+    )
 
 
 full_name = strategies.binary()
@@ -13,52 +24,56 @@ tag_number = strategies.integers(
     min_value=1,
     max_value=FieldDescriptor.MAX_FIELD_NUMBER,
 )
-field_type = strategies.sampled_from(
-    [
-        FieldDescriptor.TYPE_DOUBLE,
+field_types_and_values = strategies.one_of(
+    type_with_value(strategies.booleans(), FieldDescriptor.TYPE_BOOL),
+    type_with_value(strategies.binary(), FieldDescriptor.TYPE_BYTES),
+    type_with_value(strategies.text(), FieldDescriptor.TYPE_STRING),
+    type_with_value(strategies.floats(), FieldDescriptor.TYPE_DOUBLE),
+    type_with_value(
+        strategies.floats().map(lambda number : c_float(number).value),
         FieldDescriptor.TYPE_FLOAT,
-        FieldDescriptor.TYPE_INT64,
-        FieldDescriptor.TYPE_UINT64,
+    ),
+    type_with_value(
+        strategies.integers(min_value=-2 ** 31 + 1, max_value=2 ** 31 - 1),
         FieldDescriptor.TYPE_INT32,
-        FieldDescriptor.TYPE_FIXED64,
-        FieldDescriptor.TYPE_FIXED32,
-        FieldDescriptor.TYPE_BOOL,
-        FieldDescriptor.TYPE_STRING,
-        FieldDescriptor.TYPE_GROUP,
-        FieldDescriptor.TYPE_MESSAGE,
-        FieldDescriptor.TYPE_BYTES,
-        FieldDescriptor.TYPE_UINT32,
-        FieldDescriptor.TYPE_ENUM,
         FieldDescriptor.TYPE_SFIXED32,
-        FieldDescriptor.TYPE_SFIXED64,
         FieldDescriptor.TYPE_SINT32,
+    ),
+    type_with_value(
+        strategies.integers(min_value=-2 ** 63 + 1, max_value=2 ** 63 - 1),
+        FieldDescriptor.TYPE_INT64,
+        FieldDescriptor.TYPE_SFIXED64,
         FieldDescriptor.TYPE_SINT64,
-    ],
+    ),
+    type_with_value(
+        strategies.integers(min_value=0, max_value=2 ** 32 - 1),
+        FieldDescriptor.TYPE_FIXED32,
+        FieldDescriptor.TYPE_UINT32,
+    ),
+    type_with_value(
+        strategies.integers(min_value=0, max_value=2 ** 64 - 1),
+        FieldDescriptor.TYPE_FIXED64,
+        FieldDescriptor.TYPE_UINT64,
+    ),
+    # type_with_value(FieldDescriptor.TYPE_GROUP,
+    # type_with_value(FieldDescriptor.TYPE_MESSAGE,
+    # type_with_value(FieldDescriptor.TYPE_ENUM,
 )
-cpp_type = strategies.sampled_from(
-    [
-        FieldDescriptor.CPPTYPE_INT32,
-        FieldDescriptor.CPPTYPE_INT64,
-        FieldDescriptor.CPPTYPE_UINT32,
-        FieldDescriptor.CPPTYPE_UINT64,
-        FieldDescriptor.CPPTYPE_DOUBLE,
-        FieldDescriptor.CPPTYPE_FLOAT,
-        FieldDescriptor.CPPTYPE_BOOL,
-        FieldDescriptor.CPPTYPE_ENUM,
-        FieldDescriptor.CPPTYPE_STRING,
-        FieldDescriptor.CPPTYPE_MESSAGE,
-    ],
-)
+def to_field_descriptor_and_value((type, value), **kwargs):
+    # I have no idea why this part is my responsibility.
+    cpp_type = FieldDescriptor.ProtoTypeToCppProtoType(type)
+    return FieldDescriptor(type=type, cpp_type=cpp_type, **kwargs), value
+
+
 label = strategies.just(FieldDescriptor.LABEL_OPTIONAL)
 default_value = strategies.none()
-field = strategies.builds(
-    FieldDescriptor,
+field_and_value = strategies.builds(
+    to_field_descriptor_and_value,
+    field_types_and_values,
     name=strategies.binary(),
     full_name=full_name,
     index=index,
     number=tag_number,
-    type=field_type,
-    cpp_type=cpp_type,
     label=label,
     default_value=default_value,
     message_type=strategies.none(),
@@ -67,44 +82,79 @@ field = strategies.builds(
     is_extension=strategies.just(False),
     extension_scope=strategies.none(),
 )
-descriptor = strategies.builds(
-    Descriptor,
-    name=strategies.binary(),
+
+
+def to_descriptor_and_values(fields_and_values, **kwargs):
+    fields, values = [], {}
+    for field, value in fields_and_values:
+        fields.append(field)
+        values[field.name] = value
+    return Descriptor(fields=fields, **kwargs), values
+
+
+descriptor_and_values = strategies.builds(
+    to_descriptor_and_values,
+    fields_and_values=strategies.lists(field_and_value),
+    name=strategies.binary(min_size=1),
     full_name=full_name,
     containing_type=strategies.none(),  # TODO: strategies.recursive?
     filename=strategies.none(),
-    fields=strategies.lists(field),
     nested_types=strategies.just([]),
     enum_types=strategies.just([]),
     extensions=strategies.just([]),
 )
-Message = strategies.builds(reflection.MakeClass, descriptor)
-message = strategies.builds(Message)
+
+
+def to_Message_and_arguments((descriptor, values)):
+    return reflection.MakeClass(descriptor), values
+
+
+Message_and_arguments = strategies.builds(
+    to_Message_and_arguments, descriptor_and_values,
+)
+
+
+def to_message((Message, arguments)):
+    message = Message()
+    for attr, value in arguments.iteritems():
+        setattr(message, attr, value)
+    return message
+
+
+message = strategies.builds(to_message, Message_and_arguments)
 
 
 class TestTranscode(TestCase):
-    @given(Message)
-    def test_it_round_trips(self, Message):
-        transcoder = Transcoder(message_cls=Message)
-        self.assertEqual(
-            transcoder.from_json(transcoder.to_json(Message())),
-            Message(),
-        )
+    def assertMessagesEqual(self, message, other):
+        # We don't use addTypeEqualityFunc, it doesn't work on
+        # subclasses so you'd have to add it before comparing any
+        # descriptors / messages anyhow.
+        if message == other:
+            return
+        self.assertEqual(message.ListFields(), other.ListFields())
+        self.fail("XXX")
 
-    def test_it_round_trips_an_empty_descriptor(self):
-        descriptor = Descriptor(
-            name="Empty",
-            full_name="Empty",
-            containing_type=None,
-            filename=None,
-            fields=[],
-            nested_types=[],
-            enum_types=[],
-            extensions=[],
-        )
-        Message = reflection.MakeClass(descriptor)
-        transcoder = Transcoder(message_cls=Message)
-        self.assertEqual(
-            transcoder.from_json(transcoder.to_json(Message())),
-            Message(),
-        )
+
+    def assertRoundtrips(self, message, transcoder=None):
+        if transcoder is None:
+            transcoder = Transcoder(message_cls=message.__class__)
+        roundtripped = transcoder.from_json(transcoder.to_json(message))
+        self.assertMessagesEqual(roundtripped, message)
+
+    @example(
+        message=reflection.MakeClass(
+            descriptor=Descriptor(
+                name="Empty",
+                full_name="Empty",
+                containing_type=None,
+                filename=None,
+                fields=[],
+                nested_types=[],
+                enum_types=[],
+                extensions=[],
+            ),
+        )()
+    )
+    @given(message)
+    def test_it_round_trips(self, message):
+        self.assertRoundtrips(message=message)
