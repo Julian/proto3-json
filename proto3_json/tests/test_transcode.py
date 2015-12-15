@@ -21,9 +21,12 @@ def type_with_value(value_strategy, *type_strategies):
 full_name = strategies.binary()
 index = strategies.integers(min_value=0)
 tag_number = strategies.one_of(
-    strategies.integers(min_value=1, max_value=19000),
     strategies.integers(
-        min_value=20000, max_value=FieldDescriptor.MAX_FIELD_NUMBER,
+        min_value=1, max_value=FieldDescriptor.FIRST_RESERVED_FIELD_NUMBER - 1,
+    ),
+    strategies.integers(
+        min_value=FieldDescriptor.LAST_RESERVED_FIELD_NUMBER + 1,
+        max_value=FieldDescriptor.MAX_FIELD_NUMBER,
     ),
 )
 field_types_and_values = strategies.one_of(
