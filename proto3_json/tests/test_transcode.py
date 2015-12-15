@@ -20,9 +20,11 @@ def type_with_value(value_strategy, *type_strategies):
 
 full_name = strategies.binary()
 index = strategies.integers(min_value=0)
-tag_number = strategies.integers(
-    min_value=1,
-    max_value=FieldDescriptor.MAX_FIELD_NUMBER,
+tag_number = strategies.one_of(
+    strategies.integers(min_value=1, max_value=19000),
+    strategies.integers(
+        min_value=20000, max_value=FieldDescriptor.MAX_FIELD_NUMBER,
+    ),
 )
 field_types_and_values = strategies.one_of(
     type_with_value(strategies.booleans(), FieldDescriptor.TYPE_BOOL),
@@ -94,7 +96,9 @@ def to_descriptor_and_values(fields_and_values, **kwargs):
 
 descriptor_and_values = strategies.builds(
     to_descriptor_and_values,
-    fields_and_values=strategies.lists(field_and_value),
+    fields_and_values=strategies.lists(
+        field_and_value, unique_by=lambda (field, _) : field.number,
+    ),
     name=strategies.binary(min_size=1),
     full_name=full_name,
     containing_type=strategies.none(),  # TODO: strategies.recursive?
@@ -131,6 +135,9 @@ class TestTranscode(TestCase):
         # descriptors / messages anyhow.
         if message == other:
             return
+        self.assertEqual(
+            message.SerializeToString(), other.SerializeToString(),
+        )
         self.assertEqual(message.ListFields(), other.ListFields())
         self.fail("XXX")
 
