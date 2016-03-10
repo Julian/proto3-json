@@ -5,22 +5,11 @@ from google.protobuf.descriptor import Descriptor
 from hypothesis import example, given
 from hypothesis_protobuf.strategies import message
 
+from proto3_json.tests.utils import MessageMixin
 from proto3_json.transcode import Transcoder
 
 
-class TestTranscode(TestCase):
-    def assertMessagesEqual(self, message, other):
-        # We don't use addTypeEqualityFunc, it doesn't work on
-        # subclasses so you'd have to add it before comparing any
-        # descriptors / messages anyhow.
-        if message == other:
-            return
-        self.assertEqual(
-            message.SerializeToString(), other.SerializeToString(),
-        )
-        self.assertEqual(message.ListFields(), other.ListFields())
-        self.fail("XXX")
-
+class TestTranscode(MessageMixin, TestCase):
     def assertRoundtrips(self, message, transcoder=None):
         if transcoder is None:
             transcoder = Transcoder(message_cls=message.__class__)
