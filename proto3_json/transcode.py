@@ -1,7 +1,6 @@
 from characteristic import Attribute, attributes
 
 
-
 @attributes(
     [
         Attribute(name="message_cls"),
@@ -21,6 +20,6 @@ class Transcoder(object):
 
     def to_json(self, message):
         return {
-            name : getattr(message, name)
+            name: getattr(message, name)
             for name in message.DESCRIPTOR.fields_by_name
         }
