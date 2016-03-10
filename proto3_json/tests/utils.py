@@ -10,8 +10,8 @@ class MessageMixin(object):
         # descriptors / messages anyhow.
         if message == other:
             return
+        self.assertEqual(message.ListFields(), other.ListFields())
         self.assertEqual(
             message.SerializeToString(), other.SerializeToString(),
         )
-        self.assertEqual(message.ListFields(), other.ListFields())
         self.fail("XXX")
